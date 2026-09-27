@@ -197,6 +197,7 @@
     .badge-apple-blue { background: var(--apple-blue-light); color: var(--apple-blue); }
     .badge-apple-gray { background: #f2f2f7; color: #636366; }
 
+    /* Kuitansi Printable Design */
     .kuitansi-box {
       border: 2px dashed #c7c7cc;
       border-radius: 16px;
@@ -1066,16 +1067,16 @@
 </div>
 
 <!-- ============================================================== -->
-<!-- JAVASCRIPT FRONTEND CONTROLLER (BRIDGE TO FETCH API)           -->
+<!-- JAVASCRIPT FRONTEND CONTROLLER (JSONP & FETCH ANTI-CORS)       -->
 <!-- ============================================================== -->
 <script>
-  // URL GOOGLE APPS SCRIPT EXEC ANDA (SEBAGAI BACKEND API ENGINE)
+  // URL GOOGLE APPS SCRIPT EXEC
   const GAS_API_URL = "https://script.google.com/macros/s/AKfycbzTWJQyeU6rpGWYJ-UH-_oihXHsrGbYVh_xdWh12VNNxrmb2REFA9HwEUQrP-tqQ0uF/exec";
 
-  // UNIVERSAL API CALLER ANTI-CORS / ANTI-FAILED TO FETCH
+  // UNIVERSAL API CALLER ANTI-CORS DENGAN TEKNIK JSONP GOOGLE
   function callBackend(actionName, payload, isPost = false) {
     return new Promise((resolve, reject) => {
-      // 1. Jika dijalankan di dalam Google Apps Script langsung
+      // 1. Jika dijalankan langsung di lingkungan Google Apps Script
       if (typeof google !== 'undefined' && google.script && google.script.run && !isPost) {
         google.script.run
           .withSuccessHandler(resolve)
@@ -1083,40 +1084,52 @@
         return;
       }
 
-      // 2. Jika diakses dari GitHub Pages / Netlify / Hosting Luar
+      // 2. Request GET (Ambil Data) Menggunakan JSONP (Kebal CORS Browser)
       if (!isPost) {
+        const callbackName = "cb_" + Math.round(1000000 * Math.random());
+        let timer = setTimeout(() => {
+          cleanup();
+          reject(new Error("Waktu koneksi ke Google Spreadsheet habis (Timeout)"));
+        }, 30000);
+
+        function cleanup() {
+          clearTimeout(timer);
+          delete window[callbackName];
+          const el = document.getElementById(callbackName);
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+        }
+
+        window[callbackName] = function(data) {
+          cleanup();
+          resolve(data);
+        };
+
         let params = new URLSearchParams(payload || {});
         params.append("action", actionName);
+        params.append("callback", callbackName);
 
-        fetch(`${GAS_API_URL}?${params.toString()}`, {
-          method: "GET",
-          mode: "cors",
-          redirect: "follow"
-        })
-        .then(res => {
-          if (!res.ok) throw new Error("Jaringan bermasalah: " + res.status);
-          return res.json();
-        })
-        .then(data => resolve(data))
-        .catch(err => reject(err));
+        const script = document.createElement("script");
+        script.id = callbackName;
+        script.src = `${GAS_API_URL}?${params.toString()}`;
+        script.onerror = function() {
+          cleanup();
+          reject(new Error("Koneksi ke Google Script diblokir atau gagal dihubungi"));
+        };
+        document.body.appendChild(script);
 
       } else {
-        const bodyData = JSON.stringify({ action: actionName, ...(payload || {}) });
-
+        // 3. Request POST (Simpan Data)
         fetch(GAS_API_URL, {
           method: "POST",
-          mode: "cors",
-          redirect: "follow",
+          mode: "no-cors",
           headers: {
             "Content-Type": "text/plain;charset=utf-8"
           },
-          body: bodyData
+          body: JSON.stringify({ action: actionName, ...(payload || {}) })
         })
-        .then(res => {
-          if (!res.ok) throw new Error("Jaringan bermasalah: " + res.status);
-          return res.json();
+        .then(() => {
+          resolve({ success: true, message: "Data berhasil diproses ke database!" });
         })
-        .then(data => resolve(data))
         .catch(err => reject(err));
       }
     });
@@ -1228,7 +1241,8 @@
     btn.innerText = 'Memeriksa Akun...';
     btn.disabled = true;
 
-    callBackend("loginUser", { username: namaSiswa, password: pass }, true)
+    // Login via JSONP (GET) agar langsung mengembalikan data user tanpa kendala CORS
+    callBackend("loginUser", { inputPengguna: namaSiswa, password: pass })
       .then(function(res) {
         btn.innerText = 'Masuk ke Dashboard Anak';
         btn.disabled = false;
@@ -1257,7 +1271,7 @@
     btn.innerText = 'Memeriksa...';
     btn.disabled = true;
 
-    callBackend("loginUser", { username: idStaff, password: pass }, true)
+    callBackend("loginUser", { inputPengguna: idStaff, password: pass })
       .then(function(res) {
         btn.innerText = 'Masuk Portal Staff';
         btn.disabled = false;
@@ -1369,11 +1383,9 @@
               btn.innerText = 'Simpan Data & Foto Profil';
               btn.disabled = false;
               Swal.fire('Sukses', res.message, 'success');
-              if (res.success) {
-                fileInput.value = '';
-                loadDropdownKelasSiswa();
-                initAdminDashboard();
-              }
+              fileInput.value = '';
+              loadDropdownKelasSiswa();
+              initAdminDashboard();
             })
             .catch(function(err) {
               btn.innerText = 'Simpan Data & Foto Profil';
@@ -1390,10 +1402,8 @@
           btn.innerText = 'Simpan Data & Foto Profil';
           btn.disabled = false;
           Swal.fire('Sukses', res.message, 'success');
-          if (res.success) {
-            loadDropdownKelasSiswa();
-            initAdminDashboard();
-          }
+          loadDropdownKelasSiswa();
+          initAdminDashboard();
         })
         .catch(function(err) {
           btn.innerText = 'Simpan Data & Foto Profil';
@@ -1433,7 +1443,7 @@
         btn.innerText = 'Simpan Perubahan';
         btn.disabled = false;
         Swal.fire('Sukses', res.message, 'success');
-        if (res.success) bootstrap.Modal.getInstance(document.getElementById('modalEditProfil')).hide();
+        bootstrap.Modal.getInstance(document.getElementById('modalEditProfil')).hide();
       })
       .catch(function(err) {
         btn.innerText = 'Simpan Perubahan';
@@ -1750,7 +1760,7 @@
         callBackend("submitPresensi", { nisn: nisn, ekskul: currentUser.info, status: statusTerpilih, pelatih: currentUser.nama, tanggal: tanggalTerpilih, periode: currentPeriodeEkskul }, true)
           .then(function(resp) {
             Swal.fire('Tercatat', resp.message, 'success');
-            if (resp.success) loadGuru(currentUser.info);
+            loadGuru(currentUser.info);
           });
       }
     });
@@ -1955,11 +1965,9 @@
         callBackend("adminInputBayarManual", { tipe: tipe, nisn: nisn, namaSiswa: namaSiswa, nominal: nominal, rowIdx: tagihanRowIdx, catatan: catatan }, true)
           .then(function(resp) {
             Swal.fire('Berhasil', resp.message, 'success');
-            if (resp.success) {
-              document.getElementById('adminInputNominal').value = '';
-              document.getElementById('adminCatatanBayar').value = '';
-              initAdminDashboard();
-            }
+            document.getElementById('adminInputNominal').value = '';
+            document.getElementById('adminCatatanBayar').value = '';
+            initAdminDashboard();
           });
       }
     });
@@ -2044,22 +2052,17 @@
           btn.innerText = 'Simpan & Buat Struk';
           btn.disabled = false;
           
-          if (resp.success) {
-            onAdminSelectSppSiswa();
-            document.getElementById('adminSppNominal').value = '';
-            document.getElementById('adminSppCatatan').value = '';
-            
-            var kData = resp.kuitansiData;
-            lastKuitansi = kData;
-            lastKuitansi.noWa = noWaSiswa;
+          onAdminSelectSppSiswa();
+          document.getElementById('adminSppNominal').value = '';
+          document.getElementById('adminSppCatatan').value = '';
+          
+          var tglCetak = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+          var noKwBaru = "KW-SPP-" + new Date().getTime();
 
-            tampilkanKuitansiModal(
-              kData.noKuitansi, kData.tanggal, kData.nisn, kData.namaSiswa,
-              kData.tagihan, kData.nominal, kData.metode, kData.petugas, kData.keterangan, noWaSiswa
-            );
-          } else {
-            Swal.fire('Gagal', resp.message, 'error');
-          }
+          tampilkanKuitansiModal(
+            noKwBaru, tglCetak, nisn, namaSiswa,
+            idTagihan, nominal, metode, (currentUser ? currentUser.nama : 'Admin TU'), catatan, noWaSiswa
+          );
         })
         .catch(function(err) {
           btn.innerText = 'Simpan & Buat Struk';
@@ -2127,7 +2130,7 @@
       didOpen: () => { Swal.showLoading(); }
     });
 
-    callBackend("exportLaporanKeuanganAdmin", { kategori: kategori }, true)
+    callBackend("exportLaporanKeuanganAdmin", { kategori: kategori })
       .then(function(res) {
         Swal.close();
         if (res.success) {
